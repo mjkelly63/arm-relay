@@ -1,0 +1,6 @@
+{
+  "name": "arm-relay",
+  "type": "module",
+  "dependencies": { "ws": "^8.14.2" },
+  "scripts": { "start": "node server.js" }
+}
