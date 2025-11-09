@@ -4,6 +4,7 @@
 import http from "http";
 import { WebSocketServer } from "ws";
 
+
 const PORT = process.env.PORT || 10000;
 const AUTH = process.env.RELAY_TOKEN || "secret";
 
