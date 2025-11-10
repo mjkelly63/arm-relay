@@ -2,7 +2,7 @@
 // full server.js
 // =====================
 import http from "http";
-import { WebSocketServer } from "ws";
+import { WebSocketServer } from "ws"; 
  
 
 const PORT = process.env.PORT || 10000;
