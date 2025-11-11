@@ -1,69 +1,61 @@
-// =====================
-// full server.js
-// =====================
+// Minimal WebSocket relay for Render (HTTP + WS + keepalive)
 import http from "http";
-import { WebSocketServer } from "ws"; 
- 
-
-const PORT = process.env.PORT || 10000;
-const AUTH = process.env.RELAY_TOKEN || "secret";
-
-// tiny room registry (1 ESP + 1 client per id)
-const rooms = new Map();
-function room(id) {
-  if (!rooms.has(id)) rooms.set(id, { esp: null, client: null });
-  return rooms.get(id);
-}
+import { WebSocketServer } from "ws";
+import url from "url";
 
 const server = http.createServer((req, res) => {
-  // a plain GET for health check
-  res.writeHead(200, { "Content-Type": "text/plain" });
-  res.end("OK – relay running");
+  res.writeHead(200, {"Content-Type":"text/plain; charset=utf-8"});
+  res.end("WS relay online\n");
 });
 
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ server, perMessageDeflate: false });
 
-// connection handler
+// room -> Set<ws>
+const rooms = new Map();
+const getRoom = id => rooms.get(id) || rooms.set(id, new Set()).get(id);
+
+// keepalive: ping each client
+function heartbeat(){ this.isAlive = true; }
 wss.on("connection", (ws, req) => {
-  try {
-    const u = new URL(req.url, "http://x");
-    const role = u.searchParams.get("role");      // esp | client
-    const id   = u.searchParams.get("id") || "arm1";
-    const tok  = u.searchParams.get("token");
+  ws.isAlive = true;
+  ws.on("pong", heartbeat);
 
-    // reject if wrong token/role
-    if (tok !== AUTH || !["esp", "client"].includes(role)) {
-      ws.close();
-      return;
-    }
+  const q = url.parse(req.url, true).query;
+  const id = (q.id || "arm1").toString();    // room id (web/esp/anything)
+  const room = getRoom(id);
+  room.add(ws);
 
-    const r = room(id);
-    if (role === "esp")    r.esp = ws;
-    if (role === "client") r.client = ws;
+  // confirm hello so clients know it's stable
+  try { ws.send(JSON.stringify({hello:true, id})); } catch {}
 
-    // forward inbound messages to the opposite side
-    ws.on("message", (data, isBinary) => {
-      const other = role === "esp" ? r.client : r.esp;
-      if (!other || other.readyState !== 1) return;
-
-      if (isBinary) {
-        other.send(data, { binary: true });
-      } else {
-        const text = (typeof data === "string") ? data : data.toString();
-        other.send(text); // force text frames
+  ws.on("message", (data) => {
+    // Do NOT parse; just fan out raw or JSON text to peers.
+    // If it's not text, skip.
+    if (typeof data !== "string" && !Buffer.isBuffer(data)) return;
+    for (const peer of room) {
+      if (peer !== ws && peer.readyState === 1) {
+        try { peer.send(data); } catch {}
       }
-    });
+    }
+  });
 
-    ws.on("close", () => {
-      if (r.esp === ws) r.esp = null;
-      if (r.client === ws) r.client = null;
-    });
-
-  } catch (e) {
-    ws.close();
-  }
+  ws.on("close", () => { room.delete(ws); if (!room.size) rooms.delete(id); });
+  ws.on("error", () => {}); // swallow to avoid process crash
 });
 
-server.listen(PORT, () => {
-  console.log("Relay running on", PORT);
+// ping sweep
+const interval = setInterval(() => {
+  wss.clients.forEach((ws) => {
+    if (ws.isAlive === false) return ws.terminate();
+    ws.isAlive = false; ws.ping();
+  });
+}, 30000);
+wss.on("close", () => clearInterval(interval));
+
+// IMPORTANT on Render: bind to 0.0.0.0 and process.env.PORT
+const PORT = process.env.PORT || 10000;
+server.keepAliveTimeout = 65000;
+server.headersTimeout   = 66000;
+server.listen(PORT, "0.0.0.0", () => {
+  console.log("WS relay listening on", PORT);
 });
